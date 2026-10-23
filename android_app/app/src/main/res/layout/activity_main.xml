@@ -54,6 +54,36 @@
         android:padding="16dp"
         app:layout_constraintBottom_toBottomOf="parent">
 
+        <!-- Network Presets: Wi-Fi vs Tailscale -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="8dp">
+
+            <Button
+                android:id="@+id/btnPresetWifi"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_weight="1"
+                android:layout_marginEnd="4dp"
+                android:backgroundTint="#1e293b"
+                android:text="Wi-Fi Preset"
+                android:textColor="#38bdf8"
+                android:textSize="12sp" />
+
+            <Button
+                android:id="@+id/btnPresetTailscale"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:backgroundTint="#1e293b"
+                android:text="Tailscale Preset"
+                android:textColor="#a855f7"
+                android:textSize="12sp" />
+        </LinearLayout>
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -67,7 +97,7 @@
                 android:layout_height="48dp"
                 android:layout_weight="1"
                 android:background="#1e293b"
-                android:hint="Laptop IP (e.g. 192.168.31.214:8080)"
+                android:hint="Laptop IP (e.g. 100.112.202.122:8080)"
                 android:textColor="#f8fafc"
                 android:textColorHint="#64748b"
                 android:paddingStart="12dp"

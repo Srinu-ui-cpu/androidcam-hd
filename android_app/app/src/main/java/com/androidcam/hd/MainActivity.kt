@@ -1,10 +1,11 @@
 package com.androidcam.hd
 
 import android.Manifest
+import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.Rect
-import android.graphics.YuvImage
+import android.graphics.Matrix
 import android.os.Build
 import android.os.Bundle
 import android.util.Size
@@ -34,6 +35,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var ipAddressInput: EditText
     private lateinit var switchCameraBtn: Button
     private lateinit var startStopBtn: Button
+    private lateinit var prefs: SharedPreferences
 
     private var cameraProvider: ProcessCameraProvider? = null
     private var lensFacing = CameraSelector.LENS_FACING_BACK
@@ -50,6 +52,8 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val REQUEST_CODE_PERMISSIONS = 10
         private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
+        private const val PREFS_NAME = "AndroidCamPrefs"
+        private const val KEY_LAST_IP = "last_ip"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -57,12 +61,28 @@ class MainActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_main)
 
+        prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
         viewFinder = findViewById(R.id.viewFinder)
         statusText = findViewById(R.id.statusText)
         fpsText = findViewById(R.id.fpsText)
         ipAddressInput = findViewById(R.id.ipAddressInput)
         switchCameraBtn = findViewById(R.id.switchCameraBtn)
         startStopBtn = findViewById(R.id.startStopBtn)
+
+        // Restore last entered IP or default
+        val savedIp = prefs.getString(KEY_LAST_IP, "")
+        if (!savedIp.isNullOrEmpty()) {
+            ipAddressInput.setText(savedIp)
+        }
+
+        // Preset buttons if available
+        findViewById<Button?>(R.id.btnPresetWifi)?.setOnClickListener {
+            ipAddressInput.setText("192.168.31.214:8080")
+        }
+        findViewById<Button?>(R.id.btnPresetTailscale)?.setOnClickListener {
+            ipAddressInput.setText("100.112.202.122:8080")
+        }
 
         if (allPermissionsGranted()) {
             startCamera()
@@ -88,6 +108,8 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "Please enter your laptop IP", Toast.LENGTH_SHORT).show()
                     return@setOnClickListener
                 }
+                // Save IP for next time
+                prefs.edit().putString(KEY_LAST_IP, ip).apply()
                 startStreaming(ip)
             }
         }
@@ -102,11 +124,10 @@ class MainActivity : AppCompatActivity() {
                 it.setSurfaceProvider(viewFinder.surfaceProvider)
             }
 
-            // 1080p Image Analysis Pipeline (No 480p cap!)
+            // High Resolution 1080p Image Analysis Pipeline (Full HD, 16:9)
             val imageAnalysis = ImageAnalysis.Builder()
                 .setTargetResolution(Size(1920, 1080))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                 .build()
 
             imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
@@ -132,8 +153,25 @@ class MainActivity : AppCompatActivity() {
 
         isSendingFrame = true
         try {
-            val jpegBytes = yuv420ToJpeg(imageProxy, 85)
-            if (jpegBytes != null && webSocket != null) {
+            // CameraX built-in toBitmap() automatically resolves all YUV row strides,
+            // pixel strides, and hardware alignment padding perfectly!
+            val rawBitmap = imageProxy.toBitmap()
+            val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+
+            // Orient image correctly based on device sensor orientation
+            val bitmapToSend = if (rotationDegrees != 0) {
+                val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
+                Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
+            } else {
+                rawBitmap
+            }
+
+            // Compress to high-fidelity JPEG for crystal clear webcam streaming
+            val out = ByteArrayOutputStream()
+            bitmapToSend.compress(Bitmap.CompressFormat.JPEG, 88, out)
+            val jpegBytes = out.toByteArray()
+
+            if (webSocket != null) {
                 webSocket?.send(jpegBytes.toByteString())
                 frameCount++
 
@@ -142,8 +180,10 @@ class MainActivity : AppCompatActivity() {
                     val currentFps = frameCount
                     frameCount = 0
                     lastFpsTimestamp = now
+                    val w = bitmapToSend.width
+                    val h = bitmapToSend.height
                     runOnUiThread {
-                        fpsText.text = "1080p @ $currentFps FPS"
+                        fpsText.text = "${w}x${h} @ $currentFps FPS"
                     }
                 }
             }
@@ -153,27 +193,6 @@ class MainActivity : AppCompatActivity() {
             imageProxy.close()
             isSendingFrame = false
         }
-    }
-
-    private fun yuv420ToJpeg(image: ImageProxy, quality: Int): ByteArray? {
-        val planes = image.planes
-        val yBuffer = planes[0].buffer
-        val uBuffer = planes[1].buffer
-        val vBuffer = planes[2].buffer
-
-        val ySize = yBuffer.remaining()
-        val uSize = uBuffer.remaining()
-        val vSize = vBuffer.remaining()
-
-        val nv21 = ByteArray(ySize + uSize + vSize)
-        yBuffer.get(nv21, 0, ySize)
-        vBuffer.get(nv21, ySize, vSize)
-        uBuffer.get(nv21, ySize + vSize, uSize)
-
-        val yuvImage = YuvImage(nv21, android.graphics.ImageFormat.NV21, image.width, image.height, null)
-        val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), quality, out)
-        return out.toByteArray()
     }
 
     private fun startStreaming(host: String) {

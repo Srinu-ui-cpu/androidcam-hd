@@ -68,7 +68,7 @@ jobs:
 
       - name: Build Single EXE with PyInstaller
         run: |
-          python -m PyInstaller --noconfirm --onefile --windowed --name "AndroidCamHD" --add-data "web;web" --add-data "driver;driver" --collect-all pyvirtualcam --collect-all cv2 --collect-all qrcode --collect-all aiohttp main.py
+          python -m PyInstaller --noconfirm --onefile --windowed --name "AndroidCamHD" --add-data "web;web" --add-data "driver;driver" --collect-all pyvirtualcam --collect-all cv2 --collect-all qrcode --collect-all aiohttp --collect-all pystray --collect-all psutil main.py
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4

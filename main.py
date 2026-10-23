@@ -55,6 +55,7 @@ def main():
     parser.add_argument("--port", type=int, default=8080, help="Port to host receiver server (default: 8080)")
     parser.add_argument("--no-gui", action="store_true", help="Run in headless / CLI mode without Tkinter GUI")
     parser.add_argument("--no-vcam", action="store_true", help="Disable virtual webcam output")
+    parser.add_argument("--background", "--minimized", action="store_true", help="Start minimized in system tray on boot")
     args = parser.parse_args()
 
     state = AppState()
@@ -80,7 +81,7 @@ def main():
     if not args.no_gui:
         # Launch Tkinter GUI
         root = tk.Tk()
-        gui = AndroidCamGUI(root, state, processor, port=args.port)
+        gui = AndroidCamGUI(root, state, processor, port=args.port, start_minimized=args.background)
 
         def on_close():
             logger.info("Shutting down AndroidCam...")

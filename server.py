@@ -311,46 +311,94 @@ class VideoProcessor:
 
 
 def get_network_interfaces() -> List[Dict[str, str]]:
-    """Discovers all local network interfaces (Wi-Fi, Tailscale, Hotspot, Ethernet)."""
+    """Discovers all local network interfaces (Wi-Fi, Tailscale, Hotspot, Ethernet) reliably using psutil."""
     interfaces = []
+    seen_ips = set()
+
+    # 1. Primary discovery: psutil (native OS API, instant, 100% reliable)
     try:
-        cmd = "Get-NetIPAddress -AddressFamily IPv4 | Select-Object InterfaceAlias, IPAddress | ConvertTo-Json"
-        res = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True, timeout=5)
-        if res.returncode == 0 and res.stdout.strip():
-            raw = json.loads(res.stdout)
-            items = raw if isinstance(raw, list) else [raw]
-            for item in items:
-                alias = item.get("InterfaceAlias", "Unknown")
-                ip = item.get("IPAddress", "")
-                if ip and not ip.startswith("127.") and not ip.startswith("169.254."):
-                    # Categorize interface type
-                    kind = "Local Network"
-                    lower_alias = alias.lower()
-                    if "tailscale" in lower_alias:
+        import psutil
+        for name, addrs in psutil.net_if_addrs().items():
+            for addr in addrs:
+                if addr.family == socket.AF_INET:
+                    ip = addr.address
+                    if ip.startswith("127.") or ip.startswith("169.254."):
+                        continue
+                    if ip in seen_ips:
+                        continue
+                    seen_ips.add(ip)
+
+                    lower = name.lower()
+                    if "tailscale" in lower or ip.startswith("100."):
                         kind = "Tailscale VPN"
-                    elif "wi-fi" in lower_alias or "wlan" in lower_alias or "wireless" in lower_alias:
-                        kind = "Wi-Fi"
-                    elif "ethernet" in lower_alias or "lan" in lower_alias:
+                    elif any(w in lower for w in ["wi-fi", "wlan", "wireless"]) or ip.startswith("192.168."):
+                        kind = "Wi-Fi / LAN"
+                    elif any(w in lower for w in ["ethernet", "lan", "eth"]):
                         kind = "Ethernet"
-                    elif "hotspot" in lower_alias or "virtual" in lower_alias:
-                        kind = "Hotspot / Virtual"
+                    elif any(w in lower for w in ["hotspot", "virtual"]):
+                        kind = "Hotspot"
+                    else:
+                        kind = "Local Network"
 
-                    interfaces.append({"alias": alias, "ip": ip, "type": kind})
+                    interfaces.append({"alias": name, "ip": ip, "type": kind})
     except Exception as e:
-        logger.warning(f"PowerShell network query failed: {e}")
+        logger.warning(f"psutil network query failed: {e}")
 
-    # Fallback to standard socket if empty
+    # Sort so Tailscale and Wi-Fi are at the top
+    interfaces.sort(key=lambda x: (0 if "Tailscale" in x["type"] else (1 if "Wi-Fi" in x["type"] else 2)))
+
+    # Fallback if empty
     if not interfaces:
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
             local_ip = s.getsockname()[0]
             s.close()
-            interfaces.append({"alias": "Local Network", "ip": local_ip, "type": "LAN"})
+            interfaces.append({"alias": "Local Network", "ip": local_ip, "type": "Wi-Fi / LAN"})
         except Exception:
-            interfaces.append({"alias": "Localhost", "ip": "127.0.0.1", "type": "Loopback"})
+            interfaces.append({"alias": "Localhost", "ip": "127.0.0.1", "type": "Localhost"})
 
     return interfaces
+
+
+def is_autostart_enabled() -> bool:
+    """Checks if AndroidCam HD is configured to start on Windows boot."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ) as key:
+            val, _ = winreg.QueryValueEx(key, "AndroidCamHD")
+            return bool(val)
+    except Exception:
+        return False
+
+
+def set_autostart(enable: bool) -> bool:
+    """Enables or disables auto-starting AndroidCam HD on Windows boot."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
+            if enable:
+                if getattr(sys, "frozen", False):
+                    exe_path = sys.executable
+                else:
+                    exe_path = f'"{sys.executable}" "{os.path.abspath(sys.argv[0])}"'
+                cmd = f'"{exe_path}" --background'
+                winreg.SetValueEx(key, "AndroidCamHD", 0, winreg.REG_SZ, cmd)
+            else:
+                try:
+                    winreg.DeleteValue(key, "AndroidCamHD")
+                except FileNotFoundError:
+                    pass
+        return True
+    except Exception as e:
+        logger.error(f"Failed to toggle autostart: {e}")
+        return False
 
 
 class StreamingServer:
