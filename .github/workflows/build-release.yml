@@ -23,19 +23,13 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+          cache: 'gradle'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Build APK with Gradle
+      - name: Build APK with Gradle Wrapper
         working-directory: ./android_app
         run: |
-          chmod +x gradlew || true
-          if [ -f "gradlew" ]; then
-            ./gradlew assembleDebug --stacktrace
-          else
-            gradle assembleDebug --stacktrace
-          fi
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
 
       - name: Locate and Rename APK
         run: |
@@ -109,7 +103,6 @@ jobs:
 
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         with:
           tag_name: v1.0.0
           name: "AndroidCam HD v1.0.0 - 1080p/4K Camera Streamer"
@@ -123,8 +116,8 @@ jobs:
             - **DirectShow Virtual Camera** for Zoom, Teams, Google Meet, Discord, OBS
 
             ### 📥 Downloads
-            - **Android APK**: `AndroidCamHD.apk`
-            - **Windows Package**: `AndroidCamHD-Windows.zip` (Extract & run `AndroidCamHD.exe`)
+            - **Android APK**: [`AndroidCamHD.apk`](https://github.com/Srinu-ui-cpu/androidcam-hd/releases/download/v1.0.0/AndroidCamHD.apk)
+            - **Windows Package**: [`AndroidCamHD-Windows.zip`](https://github.com/Srinu-ui-cpu/androidcam-hd/releases/download/v1.0.0/AndroidCamHD-Windows.zip) (Extract & run `AndroidCamHD.exe`)
           draft: false
           prerelease: false
           files: |
