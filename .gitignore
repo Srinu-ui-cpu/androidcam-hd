@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.env
+.venv/
+venv/
+ENV/
+
+# PyInstaller / Build
+build/
+dist/
+*.spec
+AndroidCamHD-Windows.zip
+
+# Recordings & Snapshots
+recordings/
+
+# Android build outputs
+.gradle/
+build/
+*/build/
+*.apk
+*.aab
+local.properties
+.idea/
+*.iml
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+*.swp
+*.bak

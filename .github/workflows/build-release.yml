@@ -1,0 +1,134 @@
+name: Build and Release AndroidCam HD
+
+on:
+  push:
+    branches: [main, master]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build APK with Gradle
+        working-directory: ./android_app
+        run: |
+          chmod +x gradlew || true
+          if [ -f "gradlew" ]; then
+            ./gradlew assembleDebug --stacktrace
+          else
+            gradle assembleDebug --stacktrace
+          fi
+
+      - name: Locate and Rename APK
+        run: |
+          mkdir -p artifacts
+          APK_PATH=$(find android_app/app/build/outputs/apk/ -name "*.apk" | head -n 1)
+          if [ -n "$APK_PATH" ]; then
+            cp "$APK_PATH" artifacts/AndroidCamHD.apk
+            echo "Found APK at $APK_PATH"
+          else
+            echo "APK not found!" && exit 1
+          fi
+
+      - name: Upload Android APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AndroidCamHD-Android-APK
+          path: artifacts/AndroidCamHD.apk
+
+  build-windows:
+    name: Build Windows Executable
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build Windows Executable with PyInstaller
+        run: |
+          python -m PyInstaller --noconfirm --onedir --windowed --name "AndroidCamHD" --add-data "web;web" --add-data "driver;driver" --collect-all pyvirtualcam --collect-all cv2 --collect-all qrcode --collect-all aiohttp main.py
+
+      - name: Package Windows Release ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/AndroidCamHD/*" -DestinationPath "AndroidCamHD-Windows.zip"
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AndroidCamHD-Windows-ZIP
+          path: AndroidCamHD-Windows.zip
+
+  create-release:
+    name: Publish GitHub Release
+    needs: [build-android, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download Android Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: AndroidCamHD-Android-APK
+          path: release_assets/
+
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: AndroidCamHD-Windows-ZIP
+          path: release_assets/
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        with:
+          tag_name: v1.0.0
+          name: "AndroidCam HD v1.0.0 - 1080p/4K Camera Streamer"
+          body: |
+            ## 🚀 AndroidCam HD v1.0.0
+
+            High-Definition (1080p / 4K) DroidCam Alternative for Android & Windows.
+            - **No 480p limitation** (Full 1080p / 4K @ 30/60fps)
+            - **100% Offline** (Works over Local Wi-Fi, Hotspot, or Tailscale IP)
+            - **Zero Cloud Logins**
+            - **DirectShow Virtual Camera** for Zoom, Teams, Google Meet, Discord, OBS
+
+            ### 📥 Downloads
+            - **Android APK**: `AndroidCamHD.apk`
+            - **Windows Package**: `AndroidCamHD-Windows.zip` (Extract & run `AndroidCamHD.exe`)
+          draft: false
+          prerelease: false
+          files: |
+            release_assets/AndroidCamHD.apk
+            release_assets/AndroidCamHD-Windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

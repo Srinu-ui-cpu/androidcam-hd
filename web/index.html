@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0ea5e9">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>AndroidCam HD - 1080p Camera Streamer</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <!-- Header -->
+  <header>
+    <div class="logo-area">
+      <img src="/icon.svg" alt="AndroidCam Logo" class="logo-icon">
+      <span class="logo-title">AndroidCam HD</span>
+      <span class="badge-res" id="activeResBadge">1080P</span>
+    </div>
+    <div class="status-badge" id="statusBadge">
+      <span class="status-dot"></span>
+      <span id="statusText">Disconnected</span>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main>
+    <!-- Live Camera Viewport -->
+    <div class="preview-wrapper">
+      <video id="cameraPreview" autoplay playsinline muted></video>
+      <canvas id="captureCanvas" style="display: none;"></canvas>
+
+      <!-- Stats Overlay -->
+      <div class="stream-overlay">
+        <div class="stat-pill">
+          FPS: <span class="stat-val" id="fpsStat">0</span>
+        </div>
+        <div class="stat-pill">
+          Res: <span class="stat-val" id="resStat">--</span>
+        </div>
+        <div class="stat-pill">
+          Bitrate: <span class="stat-val" id="bitrateStat">0 KB/s</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Controls Sidebar -->
+    <div class="controls-sidebar">
+      <!-- Main Action -->
+      <div class="card">
+        <button id="toggleStreamBtn" class="btn-primary">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+          <span id="btnText">Start Streaming (1080p)</span>
+        </button>
+
+        <div class="quick-actions">
+          <button id="switchCamBtn" class="btn-secondary">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 10c0-4.418-3.582-8-8-8s-8 3.582-8 8c0 3.314 2.015 6.16 4.885 7.37L7 20l4.5-2.5L16 20l-1.885-2.63C17.985 16.16 20 13.314 20 10z"/>
+            </svg>
+            Switch Camera
+          </button>
+
+          <button id="torchBtn" class="btn-secondary">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+            </svg>
+            Flashlight
+          </button>
+
+          <button id="batterySaverBtn" class="btn-secondary">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="7" width="16" height="10" rx="2" ry="2"/>
+              <line x1="22" y1="11" x2="22" y2="13"/>
+            </svg>
+            Cool / Saver
+          </button>
+
+          <button id="audioToggleBtn" class="btn-secondary">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+              <line x1="12" y1="19" x2="12" y2="23"/>
+              <line x1="8" y1="23" x2="16" y2="23"/>
+            </svg>
+            Audio: Off
+          </button>
+        </div>
+      </div>
+
+      <!-- Video Stream Settings -->
+      <div class="card">
+        <div class="card-title">
+          <span>Video Quality</span>
+          <span style="font-size: 0.72rem; color: #94a3b8; font-weight: normal;">No 480p cap</span>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <span>Resolution</span>
+            <span id="resDetailText">1920 × 1080</span>
+          </div>
+          <select id="resolutionSelect">
+            <option value="1920x1080" selected>1080p Full HD (1920 × 1080) - Recommended</option>
+            <option value="2560x1440">2K Quad HD (2560 × 1440)</option>
+            <option value="3840x2160">4K Ultra HD (3840 × 2160)</option>
+            <option value="1280x720">720p HD (1280 × 720)</option>
+            <option value="640x480">480p SD (640 × 480 - DroidCam default)</option>
+          </select>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <span>Target Frame Rate</span>
+            <span id="fpsValText">30 FPS</span>
+          </div>
+          <select id="fpsSelect">
+            <option value="30" selected>30 FPS (Standard / Balanced)</option>
+            <option value="60">60 FPS (Ultra Smooth)</option>
+            <option value="24">24 FPS (Cinematic / Low Bandwidth)</option>
+          </select>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label">
+            <span>Compression Quality</span>
+            <span id="qualityValText">85%</span>
+          </div>
+          <input type="range" id="qualityRange" min="50" max="98" value="85">
+        </div>
+
+        <div class="setting-row" id="zoomRow" style="display: none;">
+          <div class="setting-label">
+            <span>Hardware Zoom</span>
+            <span id="zoomValText">1.0x</span>
+          </div>
+          <input type="range" id="zoomRange" min="1" max="5" step="0.1" value="1">
+        </div>
+      </div>
+
+      <!-- Connection Details -->
+      <div class="card">
+        <div class="card-title">Connection Info</div>
+        <div class="setting-row">
+          <div class="setting-label">Receiver Server Host</div>
+          <input type="text" id="serverHostInput" placeholder="Auto-detected host">
+        </div>
+        <p style="font-size: 0.75rem; color: #64748b; margin-top: 6px;">
+          Works completely offline over Local Wi-Fi, Tablet/Laptop Hotspot, or Tailscale. No internet needed.
+        </p>
+      </div>
+    </div>
+  </main>
+
+  <!-- Battery Saver Dim Screen -->
+  <div id="batterySaverOverlay">
+    <div style="font-size: 2rem;">⚡</div>
+    <div style="font-weight: 700; margin-top: 8px;">Battery Saver Active</div>
+    <p class="saver-hint">Camera streaming in background at full 1080p.<br>Tap screen anywhere to wake display.</p>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

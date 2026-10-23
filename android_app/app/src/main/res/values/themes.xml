@@ -1,0 +1,9 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.AndroidCamHD" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#0ea5e9</item>
+        <item name="colorPrimaryVariant">#0284c7</item>
+        <item name="colorOnPrimary">#ffffff</item>
+        <item name="android:statusBarColor">#0b0f19</item>
+        <item name="android:navigationBarColor">#0b0f19</item>
+    </style>
+</resources>
