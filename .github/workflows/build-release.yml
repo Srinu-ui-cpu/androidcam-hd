@@ -49,7 +49,7 @@ jobs:
           path: artifacts/AndroidCamHD.apk
 
   build-windows:
-    name: Build Windows Executable
+    name: Build Windows Single EXE
     runs-on: windows-latest
     steps:
       - name: Checkout Repository
@@ -66,20 +66,15 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build Windows Executable with PyInstaller
+      - name: Build Single EXE with PyInstaller
         run: |
-          python -m PyInstaller --noconfirm --onedir --windowed --name "AndroidCamHD" --add-data "web;web" --add-data "driver;driver" --collect-all pyvirtualcam --collect-all cv2 --collect-all qrcode --collect-all aiohttp main.py
-
-      - name: Package Windows Release ZIP
-        shell: pwsh
-        run: |
-          Compress-Archive -Path "dist/AndroidCamHD/*" -DestinationPath "AndroidCamHD-Windows.zip"
+          python -m PyInstaller --noconfirm --onefile --windowed --name "AndroidCamHD" --add-data "web;web" --add-data "driver;driver" --collect-all pyvirtualcam --collect-all cv2 --collect-all qrcode --collect-all aiohttp main.py
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AndroidCamHD-Windows-ZIP
-          path: AndroidCamHD-Windows.zip
+          name: AndroidCamHD-Windows-EXE
+          path: dist/AndroidCamHD.exe
 
   create-release:
     name: Publish GitHub Release
@@ -98,7 +93,7 @@ jobs:
       - name: Download Windows Artifact
         uses: actions/download-artifact@v4
         with:
-          name: AndroidCamHD-Windows-ZIP
+          name: AndroidCamHD-Windows-EXE
           path: release_assets/
 
       - name: Create or Update GitHub Release
@@ -110,18 +105,19 @@ jobs:
             ## 🚀 AndroidCam HD v1.0.0
 
             High-Definition (1080p / 4K) DroidCam Alternative for Android & Windows.
-            - **No 480p limitation** (Full 1080p / 4K @ 30/60fps)
-            - **100% Offline** (Works over Local Wi-Fi, Hotspot, or Tailscale IP)
-            - **Zero Cloud Logins**
-            - **DirectShow Virtual Camera** for Zoom, Teams, Google Meet, Discord, OBS
+            - **Single Standalone EXE**: Just double-click `AndroidCamHD.exe` on any Windows PC. No scripts, no bat files, everything auto-installs internally!
+            - **No 480p limitation**: Full 1080p / 4K @ 30/60fps.
+            - **100% Offline**: Works over Local Wi-Fi, Hotspot, or Tailscale private IP.
+            - **Zero Cloud Logins**: No accounts, completely private.
+            - **DirectShow Virtual Camera**: Seamlessly works with Zoom, Microsoft Teams, Google Meet, Discord, OBS.
 
             ### 📥 Downloads
-            - **Android APK**: [`AndroidCamHD.apk`](https://github.com/Srinu-ui-cpu/androidcam-hd/releases/download/v1.0.0/AndroidCamHD.apk)
-            - **Windows Package**: [`AndroidCamHD-Windows.zip`](https://github.com/Srinu-ui-cpu/androidcam-hd/releases/download/v1.0.0/AndroidCamHD-Windows.zip) (Extract & run `AndroidCamHD.exe`)
+            - 💻 **Windows (Single Standalone EXE)**: [`AndroidCamHD.exe`](https://github.com/Srinu-ui-cpu/androidcam-hd/releases/download/v1.0.0/AndroidCamHD.exe)
+            - 📱 **Android (Native APK)**: [`AndroidCamHD.apk`](https://github.com/Srinu-ui-cpu/androidcam-hd/releases/download/v1.0.0/AndroidCamHD.apk)
           draft: false
           prerelease: false
           files: |
             release_assets/AndroidCamHD.apk
-            release_assets/AndroidCamHD-Windows.zip
+            release_assets/AndroidCamHD.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

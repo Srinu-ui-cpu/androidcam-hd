@@ -16,7 +16,14 @@ import numpy as np
 from PIL import Image, ImageTk
 import qrcode
 
-from server import AppState, VideoProcessor, get_network_interfaces, get_base_path
+from server import (
+    AppState,
+    VideoProcessor,
+    get_network_interfaces,
+    get_base_path,
+    check_virtual_camera_status,
+    install_driver_auto
+)
 
 
 class AndroidCamGUI:
@@ -45,6 +52,23 @@ class AndroidCamGUI:
 
         # Start UI update loop
         self.root.after(30, self._update_ui_loop)
+
+        # Check driver registration on startup
+        self.root.after(800, self._check_startup_driver)
+
+    def _check_startup_driver(self):
+        """Silently verifies driver and offers automatic 1-click registration on first run."""
+        is_ok, dev = check_virtual_camera_status()
+        if not is_ok:
+            # First-run prompt to register virtual camera seamlessly
+            msg = (
+                "Welcome to AndroidCam HD!\n\n"
+                "Enable the Virtual Webcam driver now?\n\n"
+                "This allows Zoom, Microsoft Teams, Google Meet, and Discord\n"
+                "to instantly see your tablet as a webcam."
+            )
+            if messagebox.askyesno("Enable Virtual Webcam", msg, parent=self.root):
+                self._install_driver_prompt()
 
     def _apply_dark_theme(self):
         style = ttk.Style()
@@ -382,23 +406,44 @@ class AndroidCamGUI:
         os.startfile(folder)
 
     def _install_driver_prompt(self):
-        bat_file = get_base_path() / "driver" / "install_driver.bat"
-        if not bat_file.exists():
-            bat_file = Path("driver/install_driver.bat").resolve()
-        if not bat_file.exists():
-            messagebox.showerror("Error", f"Could not find driver installer at:\n{bat_file}")
-            return
+        """Installs and registers virtual camera driver internally without needing any .bat scripts."""
+        try:
+            success = install_driver_auto(self.root.winfo_id())
+            if success:
+                # Wait 1.5 seconds for regsvr32 to complete registration
+                self.root.after(1500, self._verify_driver_after_install)
+            else:
+                messagebox.showerror(
+                    "Driver Setup",
+                    "Administrator permission was declined or registration failed.\n"
+                    "You can still preview, record, and snapshot without the virtual camera.",
+                    parent=self.root
+                )
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to execute driver installer: {e}", parent=self.root)
 
-        msg = (
-            "Clicking Yes will launch the Virtual Camera Driver Installer with Administrator privileges.\n\n"
-            "This will register 'Unity Video Capture' as a native DirectShow webcam in Windows.\n\n"
-            "Proceed?"
-        )
-        if messagebox.askyesno("Install Virtual Camera Driver", msg):
-            try:
-                subprocess.Popen(["cmd.exe", "/c", str(bat_file)], shell=True)
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to execute driver installer: {e}")
+    def _verify_driver_after_install(self):
+        is_ok, dev = check_virtual_camera_status()
+        if is_ok:
+            messagebox.showinfo(
+                "Driver Registered",
+                f"Virtual Camera is now ACTIVE!\n\nDevice: {dev}\n\n"
+                "You can now select this camera in Zoom, Teams, Meet, and Discord.",
+                parent=self.root
+            )
+            with self.state.lock:
+                self.state.virtual_cam_active = True
+                self.state.virtual_cam_device = dev
+                self.state.virtual_cam_error = ""
+        else:
+            # Try once more in 1 second
+            time.sleep(1)
+            is_ok, dev = check_virtual_camera_status()
+            if is_ok:
+                with self.state.lock:
+                    self.state.virtual_cam_active = True
+                    self.state.virtual_cam_device = dev
+                    self.state.virtual_cam_error = ""
 
     def _update_ui_loop(self):
         # 1. Update Connection Status

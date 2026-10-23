@@ -3,15 +3,21 @@ AndroidCam HD - High Performance Video Receiver & Virtual Camera Hub
 """
 
 import asyncio
+import ctypes
 import json
 import logging
 import os
+import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict
+
+# Prevent OpenBLAS thread allocation issues on Windows
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
 import cv2
 import numpy as np
@@ -37,6 +43,81 @@ def get_base_path() -> Path:
             return Path(sys._MEIPASS)
         return Path(sys.executable).parent
     return Path(__file__).parent
+
+
+def check_virtual_camera_status() -> Tuple[bool, str]:
+    """Checks whether Windows recognized any Virtual Camera (Unity Capture or OBS)."""
+    if not PYVIRTUALCAM_AVAILABLE:
+        return False, "pyvirtualcam library not available"
+
+    # 1. Check Unity Video Capture
+    try:
+        import pyvirtualcam._native_windows_unity_capture as uc
+        c = uc.Camera(width=64, height=64, fps=30.0, fourcc=0, device=None)
+        dev = str(c.device)
+        c.close()
+        return True, dev
+    except Exception as e:
+        uc_err = str(e)
+
+    # 2. Check OBS Virtual Camera
+    try:
+        import pyvirtualcam._native_windows_obs as obs
+        c = obs.Camera(width=64, height=64, fps=30.0, fourcc=0, device=None)
+        dev = str(c.device)
+        c.close()
+        return True, dev
+    except Exception as e:
+        obs_err = str(e)
+
+    return False, f"Not registered ({uc_err})"
+
+
+def install_driver_auto(hwnd=None) -> bool:
+    """
+    Automatically extracts DLLs to permanent %LOCALAPPDATA%\\AndroidCamHD\\driver
+    and registers them with Windows DirectShow via UAC elevation.
+    No .bat files or command line needed!
+    """
+    try:
+        appdata = os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local"))
+        dest_dir = Path(appdata) / "AndroidCamHD" / "driver"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        src_dir = get_base_path() / "driver"
+        dll64 = dest_dir / "UnityCaptureFilter64.dll"
+        dll32 = dest_dir / "UnityCaptureFilter32.dll"
+
+        # Copy DLLs permanently
+        if (src_dir / "UnityCaptureFilter64.dll").exists():
+            shutil.copy2(src_dir / "UnityCaptureFilter64.dll", dll64)
+        if (src_dir / "UnityCaptureFilter32.dll").exists():
+            shutil.copy2(src_dir / "UnityCaptureFilter32.dll", dll32)
+
+        # Trigger elevated silent regsvr32
+        ret = ctypes.windll.shell32.ShellExecuteW(
+            hwnd,
+            "runas",
+            "regsvr32.exe",
+            f'/s "{dll64}"',
+            None,
+            0  # SW_HIDE
+        )
+        if ret > 32:
+            if dll32.exists():
+                ctypes.windll.shell32.ShellExecuteW(
+                    hwnd,
+                    "runas",
+                    "regsvr32.exe",
+                    f'/s "{dll32}"',
+                    None,
+                    0
+                )
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Failed to auto-install driver: {e}")
+        return False
 
 
 class AppState:

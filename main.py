@@ -2,6 +2,8 @@
 AndroidCam HD - Main Application Entry Point
 """
 
+import os
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
 import argparse
 import asyncio
 import logging
