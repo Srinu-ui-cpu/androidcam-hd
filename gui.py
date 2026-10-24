@@ -24,6 +24,7 @@ from server import (
     get_network_interfaces,
     get_base_path,
     check_virtual_camera_status,
+    register_driver_user_space,
     install_driver_auto,
     is_autostart_enabled,
     set_autostart
@@ -551,9 +552,18 @@ class AndroidCamGUI:
         os.startfile(folder)
 
     def _check_startup_driver(self):
-        """Checks driver and offers automatic 1-click registration on first run."""
+        """Checks driver and ensures automatic registration without needing admin rights."""
+        # 1. Silently attempt user-space registration (no UAC prompt, zero admin rights needed!)
+        register_driver_user_space()
+
+        # 2. Check virtual camera status
         is_ok, dev = check_virtual_camera_status()
-        if not is_ok:
+        if is_ok:
+            with self.state.lock:
+                self.state.virtual_cam_active = True
+                self.state.virtual_cam_device = dev
+                self.state.virtual_cam_error = ""
+        else:
             msg = (
                 "Welcome to AndroidCam HD!\n\n"
                 "Enable the Virtual Webcam driver now?\n\n"
@@ -562,11 +572,6 @@ class AndroidCamGUI:
             )
             if messagebox.askyesno("Enable Virtual Webcam", msg, parent=self.root):
                 self._install_driver_prompt()
-        else:
-            with self.state.lock:
-                self.state.virtual_cam_active = True
-                self.state.virtual_cam_device = dev
-                self.state.virtual_cam_error = ""
 
     def _install_driver_prompt(self):
         """Installs and registers virtual camera driver internally without needing any .bat scripts."""

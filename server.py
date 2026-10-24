@@ -80,17 +80,81 @@ def check_virtual_camera_status() -> Tuple[bool, str]:
         return False, f"Not registered ({e})"
 
 
+def register_driver_user_space() -> bool:
+    """
+    Registers the Virtual Camera DirectShow filter directly into HKCU (Current User).
+    Requires ZERO Administrator privileges, NEVER triggers UAC prompts,
+    and works even on standard, non-admin user accounts!
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+        appdata = os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local"))
+        dest_dir = Path(appdata) / "AndroidCamHD" / "driver"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        src_dir = get_base_path() / "driver"
+        dll64 = dest_dir / "UnityCaptureFilter64.dll"
+        dll32 = dest_dir / "UnityCaptureFilter32.dll"
+
+        # Copy DLLs permanently to LocalAppData
+        if (src_dir / "UnityCaptureFilter64.dll").exists() and not dll64.exists():
+            shutil.copy2(src_dir / "UnityCaptureFilter64.dll", dll64)
+        if (src_dir / "UnityCaptureFilter32.dll").exists() and not dll32.exists():
+            shutil.copy2(src_dir / "UnityCaptureFilter32.dll", dll32)
+
+        if not dll64.exists():
+            return False
+
+        # 1. Register 64-bit InprocServer32 in HKCU\Software\Classes\CLSID
+        clsid_path = r"Software\Classes\CLSID\{5C2CD55C-92AD-4999-8666-912BD3E70010}"
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, clsid_path) as k:
+            winreg.SetValue(k, "", winreg.REG_SZ, "AndroidCam HD")
+            with winreg.CreateKey(k, "InprocServer32") as inproc:
+                winreg.SetValue(inproc, "", winreg.REG_SZ, str(dll64.resolve()))
+                winreg.SetValueEx(inproc, "ThreadingModel", 0, winreg.REG_SZ, "Both")
+
+        # 2. Register DirectShow Video Input Category in HKCU
+        cat_path = r"Software\Classes\CLSID\{860BB310-5D01-11d0-BD3B-00A0C911CE86}\Instance\{5C2CD55C-92AD-4999-8666-912BD3E70010}"
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, cat_path) as cat:
+            winreg.SetValueEx(cat, "CLSID", 0, winreg.REG_SZ, "{5C2CD55C-92AD-4999-8666-912BD3E70010}")
+            winreg.SetValueEx(cat, "FriendlyName", 0, winreg.REG_SZ, "AndroidCam HD")
+            winreg.SetValueEx(cat, "DevicePath", 0, winreg.REG_SZ, "foo:bar")
+            filter_data = b'\x02\x00\x00\x00\x00\x00 \x00\x01\x00\x00\x00\x00\x00\x00\x000pi3\x08\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x000ty3\x00\x00\x00\x008\x00\x00\x00H\x00\x00\x00vids\x00\x00\x10\x00\x80\x00\x00\xaa\x008\x9bq\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+            winreg.SetValueEx(cat, "FilterData", 0, winreg.REG_BINARY, filter_data)
+
+        # 3. Media Foundation FrameServer compatibility in HKCU
+        mf_path = r"Software\Microsoft\Windows Media Foundation\Platform"
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, mf_path) as mf:
+            winreg.SetValueEx(mf, "EnableFrameServerMode", 0, winreg.REG_DWORD, 0)
+
+        logger.info("[+] User-space registration succeeded in HKCU without administrator rights.")
+        return True
+    except Exception as e:
+        logger.error(f"User-space registration error: {e}")
+        return False
+
+
 def install_driver_auto(hwnd=None) -> bool:
     """
     Installs and registers virtual camera driver internally without needing any .bat scripts.
-    Configures DirectShow filters and registry for Windows 10/11 system-wide webcam recognition.
+    1. First attempts zero-privilege user-space (HKCU) registration (works 100% without admin rights).
+    2. Fallback to elevated UAC registration only if needed.
     """
-    # 1. If camera is already registered and working, just ensure friendly name and succeed immediately!
+    # 1. If camera is already registered and working, succeed immediately!
     is_ok, dev = check_virtual_camera_status()
     if is_ok:
         ensure_camera_friendly_name("AndroidCam HD")
         return True
 
+    # 2. Attempt zero-admin user-space registration
+    if register_driver_user_space():
+        is_ok, dev = check_virtual_camera_status()
+        if is_ok:
+            return True
+
+    # 3. Fallback: elevated registration if user explicitly requested system-wide install
     try:
         appdata = os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local"))
         dest_dir = Path(appdata) / "AndroidCamHD" / "driver"
