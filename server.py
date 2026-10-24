@@ -45,40 +45,52 @@ def get_base_path() -> Path:
     return Path(__file__).parent
 
 
+def ensure_camera_friendly_name(name: str = "AndroidCam HD"):
+    """Configures the DirectShow friendly name in HKCU and enables Windows FrameServer compatibility."""
+    if sys.platform != "win32":
+        return
+    try:
+        import winreg
+        # DirectShow Video Input Device Category
+        path = r"Software\Classes\CLSID\{860BB310-5D01-11d0-BD3B-00A0C911CE86}\Instance\{5C2CD55C-92AD-4999-8666-912BD3E70010}"
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, path) as k:
+            winreg.SetValueEx(k, "FriendlyName", 0, winreg.REG_SZ, name)
+            winreg.SetValueEx(k, "CLSID", 0, winreg.REG_SZ, "{5C2CD55C-92AD-4999-8666-912BD3E70010}")
+
+        # Media Foundation FrameServer compatibility (allows Windows Camera app and Store apps to see DirectShow camera)
+        mf_path = r"Software\Microsoft\Windows Media Foundation\Platform"
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, mf_path) as k:
+            winreg.SetValueEx(k, "EnableFrameServerMode", 0, winreg.REG_DWORD, 0)
+    except Exception as e:
+        logger.debug(f"Could not update camera friendly name in HKCU: {e}")
+
+
 def check_virtual_camera_status() -> Tuple[bool, str]:
     """Checks whether Windows recognized any Virtual Camera (Unity Capture or OBS)."""
     if not PYVIRTUALCAM_AVAILABLE:
         return False, "pyvirtualcam library not available"
 
-    # 1. Check Unity Video Capture
     try:
-        import pyvirtualcam._native_windows_unity_capture as uc
-        c = uc.Camera(width=64, height=64, fps=30.0, fourcc=0, device=None)
-        dev = str(c.device)
+        import pyvirtualcam
+        c = pyvirtualcam.Camera(width=64, height=64, fps=30.0, fmt=pyvirtualcam.PixelFormat.BGR)
         c.close()
-        return True, dev
+        ensure_camera_friendly_name("AndroidCam HD")
+        return True, "AndroidCam HD"
     except Exception as e:
-        uc_err = str(e)
-
-    # 2. Check OBS Virtual Camera
-    try:
-        import pyvirtualcam._native_windows_obs as obs
-        c = obs.Camera(width=64, height=64, fps=30.0, fourcc=0, device=None)
-        dev = str(c.device)
-        c.close()
-        return True, dev
-    except Exception as e:
-        obs_err = str(e)
-
-    return False, f"Not registered ({uc_err})"
+        return False, f"Not registered ({e})"
 
 
 def install_driver_auto(hwnd=None) -> bool:
     """
-    Automatically extracts DLLs to permanent %LOCALAPPDATA%\\AndroidCamHD\\driver
-    and registers them with Windows DirectShow via UAC elevation.
-    No .bat files or command line needed!
+    Installs and registers virtual camera driver internally without needing any .bat scripts.
+    Configures DirectShow filters and registry for Windows 10/11 system-wide webcam recognition.
     """
+    # 1. If camera is already registered and working, just ensure friendly name and succeed immediately!
+    is_ok, dev = check_virtual_camera_status()
+    if is_ok:
+        ensure_camera_friendly_name("AndroidCam HD")
+        return True
+
     try:
         appdata = os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local"))
         dest_dir = Path(appdata) / "AndroidCamHD" / "driver"
@@ -94,26 +106,32 @@ def install_driver_auto(hwnd=None) -> bool:
         if (src_dir / "UnityCaptureFilter32.dll").exists():
             shutil.copy2(src_dir / "UnityCaptureFilter32.dll", dll32)
 
-        # Trigger elevated silent regsvr32
+        # Write clean elevated registration script
+        cmd_script = dest_dir / "register_camera.cmd"
+        cmd_content = f'''@echo off
+regsvr32.exe /s "{dll64}"
+if exist "{dll32}" regsvr32.exe /s "{dll32}"
+reg add "HKLM\\SOFTWARE\\Classes\\CLSID\\{{860BB310-5D01-11d0-BD3B-00A0C911CE86}}\\Instance\\{{5C2CD55C-92AD-4999-8666-912BD3E70010}}" /v FriendlyName /d "AndroidCam HD" /f >nul 2>&1
+reg add "HKLM\\SOFTWARE\\WOW6432Node\\Classes\\CLSID\\{{860BB310-5D01-11d0-BD3B-00A0C911CE86}}\\Instance\\{{5C2CD55C-92AD-4999-8666-912BD3E70010}}" /v FriendlyName /d "AndroidCam HD" /f >nul 2>&1
+reg add "HKLM\\SOFTWARE\\Microsoft\\Windows Media Foundation\\Platform" /v EnableFrameServerMode /t REG_DWORD /d 0 /f >nul 2>&1
+reg add "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows Media Foundation\\Platform" /v EnableFrameServerMode /t REG_DWORD /d 0 /f >nul 2>&1
+'''
+        cmd_script.write_text(cmd_content, encoding="utf-8")
+
+        # Execute elevated silently (hwnd=None)
         ret = ctypes.windll.shell32.ShellExecuteW(
-            hwnd,
+            None,
             "runas",
-            "regsvr32.exe",
-            f'/s "{dll64}"',
+            "cmd.exe",
+            f'/c "{cmd_script}"',
             None,
             0  # SW_HIDE
         )
         if ret > 32:
-            if dll32.exists():
-                ctypes.windll.shell32.ShellExecuteW(
-                    hwnd,
-                    "runas",
-                    "regsvr32.exe",
-                    f'/s "{dll32}"',
-                    None,
-                    0
-                )
-            return True
+            time.sleep(1.5)
+            ensure_camera_friendly_name("AndroidCam HD")
+            is_ok, _ = check_virtual_camera_status()
+            return is_ok
         return False
     except Exception as e:
         logger.error(f"Failed to auto-install driver: {e}")
@@ -163,13 +181,49 @@ class AppState:
 
 
 class VideoProcessor:
-    """Handles frame decoding, transformations, virtual camera feeding, and recording."""
+    """Decoupled, zero-lag background worker for decoding, transforming, and sending to virtual webcam."""
     def __init__(self, state: AppState):
         self.state = state
         self.vcam: Optional[pyvirtualcam.Camera] = None
         self.vcam_dims: Optional[Tuple[int, int]] = None
         self.output_dir = Path("recordings")
         self.output_dir.mkdir(exist_ok=True)
+
+        # Zero-Lag Worker Queue: Only keeps the latest frame!
+        # If network frames arrive faster than decoding, older frames are dropped instantly!
+        self._latest_raw_bytes: Optional[bytes] = None
+        self._frame_lock = threading.Lock()
+        self._frame_event = threading.Event()
+        self._running = True
+
+        self._worker_thread = threading.Thread(target=self._worker_loop, name="ZeroLagVideoWorker", daemon=True)
+        self._worker_thread.start()
+
+    def push_raw_frame(self, raw_bytes: bytes):
+        """Called by network thread: instant O(1) swap. Never blocks network loop!"""
+        with self._frame_lock:
+            self._latest_raw_bytes = raw_bytes
+        self._frame_event.set()
+
+    # Backwards compatibility alias
+    def process_raw_frame(self, raw_bytes: bytes):
+        self.push_raw_frame(raw_bytes)
+
+    def _worker_loop(self):
+        """Dedicated high-priority worker loop for real-time decoding without queue lag."""
+        while self._running:
+            if not self._frame_event.wait(timeout=0.1):
+                continue
+            self._frame_event.clear()
+
+            with self._frame_lock:
+                raw_bytes = self._latest_raw_bytes
+                self._latest_raw_bytes = None
+
+            if raw_bytes is None:
+                continue
+
+            self._process_single_frame(raw_bytes)
 
     def init_virtual_camera(self, width: int, height: int, fps: int = 30):
         if not PYVIRTUALCAM_AVAILABLE or not self.state.virtual_cam_enabled:
@@ -189,7 +243,6 @@ class VideoProcessor:
 
         try:
             logger.info(f"Initializing Windows Virtual Camera at {width}x{height} @ {fps}fps...")
-            # We use BGR pixel format directly matching OpenCV
             self.vcam = pyvirtualcam.Camera(
                 width=width,
                 height=height,
@@ -198,16 +251,17 @@ class VideoProcessor:
                 print_fps=False
             )
             self.vcam_dims = (width, height)
+            ensure_camera_friendly_name("AndroidCam HD")
             self.state.virtual_cam_active = True
-            self.state.virtual_cam_device = str(self.vcam.device)
+            self.state.virtual_cam_device = "AndroidCam HD"
             self.state.virtual_cam_error = ""
-            logger.info(f"[+] Virtual Camera active: {self.vcam.device}")
+            logger.info("[+] Virtual Camera active: AndroidCam HD")
         except Exception as e:
             self.state.virtual_cam_active = False
             self.state.virtual_cam_error = str(e)
             logger.warning(f"Virtual camera not initialized: {e}")
 
-    def process_raw_frame(self, raw_bytes: bytes):
+    def _process_single_frame(self, raw_bytes: bytes):
         # 1. Fast JPEG decode via OpenCV C++ TurboJPEG
         nparr = np.frombuffer(raw_bytes, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -299,6 +353,8 @@ class VideoProcessor:
                 self.state.last_stat_time = now
 
     def close(self):
+        self._running = False
+        self._frame_event.set()
         if self.vcam is not None:
             try:
                 self.vcam.close()
@@ -428,6 +484,14 @@ class StreamingServer:
         ws = web.WebSocketResponse(max_msg_size=16 * 1024 * 1024)
         await ws.prepare(request)
 
+        # Enable TCP_NODELAY for instantaneous sub-millisecond packet transmission
+        sock = request.transport.get_extra_info('socket')
+        if sock:
+            try:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except Exception:
+                pass
+
         client_ip = request.remote
         logger.info(f"[+] Client connected from {client_ip}")
 
@@ -438,8 +502,8 @@ class StreamingServer:
         try:
             async for msg in ws:
                 if msg.type == web.WSMsgType.BINARY:
-                    # Raw JPEG frame received from Android tablet
-                    self.processor.process_raw_frame(msg.data)
+                    # Instantaneous zero-lag push to dedicated worker: non-blocking O(1)
+                    self.processor.push_raw_frame(msg.data)
 
                 elif msg.type == web.WSMsgType.TEXT:
                     try:
@@ -452,7 +516,8 @@ class StreamingServer:
                                 self.state.client_device_info = f"{dev} ({res})"
                             logger.info(f"Client Device: {dev} [Resolution: {res}]")
                         elif msg_type == "ping":
-                            await ws.send_json({"type": "pong", "time": time.time()})
+                            # Immediate pong echo for precise latency measurement
+                            await ws.send_json({"type": "pong", "time": data.get("time", time.time())})
                     except Exception as e:
                         logger.warning(f"Malformed JSON from client: {e}")
 

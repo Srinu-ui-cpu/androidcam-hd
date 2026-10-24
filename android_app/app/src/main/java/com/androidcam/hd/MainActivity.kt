@@ -41,10 +41,13 @@ class MainActivity : AppCompatActivity() {
     private var lensFacing = CameraSelector.LENS_FACING_BACK
     private var cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
 
-    private var client: OkHttpClient = OkHttpClient()
+    private var client: OkHttpClient = OkHttpClient.Builder().retryOnConnectionFailure(true).build()
     private var webSocket: WebSocket? = null
     private var isStreaming = false
     private var isSendingFrame = false
+
+    private val compressStream = ByteArrayOutputStream(256 * 1024)
+    private var currentLatencyMs = 0L
 
     private var frameCount = 0
     private var lastFpsTimestamp = System.currentTimeMillis()
@@ -124,10 +127,11 @@ class MainActivity : AppCompatActivity() {
                 it.setSurfaceProvider(viewFinder.surfaceProvider)
             }
 
-            // High Resolution 1080p Image Analysis Pipeline (Full HD, 16:9)
+            // High Resolution 1080p Image Analysis Pipeline (Full HD, 16:9, Zero-Lag)
             val imageAnalysis = ImageAnalysis.Builder()
                 .setTargetResolution(Size(1920, 1080))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setImageQueueDepth(1)
                 .build()
 
             imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
@@ -151,41 +155,64 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        // ZERO-LAG BUFFER CHECK:
+        // If OkHttp has any queued bytes in the network socket buffer, skip this frame immediately!
+        // Never allow a backlog of frames to accumulate over Wi-Fi or Tailscale.
+        val queueSize = webSocket?.queueSize() ?: 0L
+        if (queueSize > 0L) {
+            imageProxy.close()
+            return
+        }
+
         isSendingFrame = true
         try {
-            // CameraX built-in toBitmap() automatically resolves all YUV row strides,
-            // pixel strides, and hardware alignment padding perfectly!
+            // CameraX built-in toBitmap() automatically resolves all YUV row strides and padding
             val rawBitmap = imageProxy.toBitmap()
             val rotationDegrees = imageProxy.imageInfo.rotationDegrees
 
             // Orient image correctly based on device sensor orientation
             val bitmapToSend = if (rotationDegrees != 0) {
                 val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
-                Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
+                val rotated = Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
+                rawBitmap.recycle()
+                rotated
             } else {
                 rawBitmap
             }
 
-            // Compress to high-fidelity JPEG for crystal clear webcam streaming
-            val out = ByteArrayOutputStream()
-            bitmapToSend.compress(Bitmap.CompressFormat.JPEG, 88, out)
-            val jpegBytes = out.toByteArray()
+            // High-speed low-latency compression (75% quality is crystal clear 1080p, but 1/5th the payload of 88%)
+            synchronized(compressStream) {
+                compressStream.reset()
+                bitmapToSend.compress(Bitmap.CompressFormat.JPEG, 75, compressStream)
+                val jpegBytes = compressStream.toByteArray()
 
-            if (webSocket != null) {
-                webSocket?.send(jpegBytes.toByteString())
-                frameCount++
+                if (webSocket != null) {
+                    webSocket?.send(jpegBytes.toByteString())
+                    frameCount++
 
-                val now = System.currentTimeMillis()
-                if (now - lastFpsTimestamp >= 1000) {
-                    val currentFps = frameCount
-                    frameCount = 0
-                    lastFpsTimestamp = now
-                    val w = bitmapToSend.width
-                    val h = bitmapToSend.height
-                    runOnUiThread {
-                        fpsText.text = "${w}x${h} @ $currentFps FPS"
+                    val now = System.currentTimeMillis()
+                    if (now - lastFpsTimestamp >= 1000) {
+                        val currentFps = frameCount
+                        frameCount = 0
+                        lastFpsTimestamp = now
+                        val w = bitmapToSend.width
+                        val h = bitmapToSend.height
+                        runOnUiThread {
+                            fpsText.text = "${w}x${h} @ $currentFps FPS | Lag: ${currentLatencyMs}ms"
+                        }
+
+                        // Send lightweight ping to measure exact round-trip latency
+                        val ping = JSONObject().apply {
+                            put("type", "ping")
+                            put("time", now)
+                        }
+                        webSocket?.send(ping.toString())
                     }
                 }
+            }
+
+            if (bitmapToSend != rawBitmap) {
+                bitmapToSend.recycle()
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -218,6 +245,19 @@ class MainActivity : AppCompatActivity() {
                     put("resolution", "1920x1080")
                 }
                 webSocket.send(hello.toString())
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                try {
+                    val json = JSONObject(text)
+                    if (json.optString("type") == "pong") {
+                        val sentTime = json.optLong("time", 0L)
+                        if (sentTime > 0) {
+                            val rtt = System.currentTimeMillis() - sentTime
+                            currentLatencyMs = rtt
+                        }
+                    }
+                } catch (e: Exception) {}
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {

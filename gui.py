@@ -558,17 +558,22 @@ class AndroidCamGUI:
                 "Welcome to AndroidCam HD!\n\n"
                 "Enable the Virtual Webcam driver now?\n\n"
                 "This allows Zoom, Microsoft Teams, Google Meet, and Discord\n"
-                "to instantly see your tablet as a webcam."
+                "to instantly see your tablet as 'AndroidCam HD' webcam."
             )
             if messagebox.askyesno("Enable Virtual Webcam", msg, parent=self.root):
                 self._install_driver_prompt()
+        else:
+            with self.state.lock:
+                self.state.virtual_cam_active = True
+                self.state.virtual_cam_device = dev
+                self.state.virtual_cam_error = ""
 
     def _install_driver_prompt(self):
         """Installs and registers virtual camera driver internally without needing any .bat scripts."""
         try:
-            success = install_driver_auto(self.root.winfo_id())
+            success = install_driver_auto(None)
             if success:
-                self.root.after(1500, self._verify_driver_after_install)
+                self.root.after(1000, self._verify_driver_after_install)
             else:
                 messagebox.showerror(
                     "Driver Setup",
@@ -585,7 +590,7 @@ class AndroidCamGUI:
             messagebox.showinfo(
                 "Driver Registered",
                 f"Virtual Camera is now ACTIVE!\n\nDevice: {dev}\n\n"
-                "You can now select this camera in Zoom, Teams, Meet, and Discord.",
+                "You can now select 'AndroidCam HD' in Zoom, Teams, Meet, Discord, and Windows Camera.",
                 parent=self.root
             )
             with self.state.lock:
